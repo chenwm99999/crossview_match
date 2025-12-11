@@ -1,0 +1,43 @@
+data:
+  root: "data/University-Release"
+  label_file: "data/university_labels.json"
+  img_size: 256
+  num_workers: 4
+
+model:
+  backbone: "swin_tiny_patch4_window7_224"
+  use_imagenet_pretrained: true 
+  embed_dim: 512
+  num_universities: 36
+  num_buildings: 701
+
+phase1:
+  batch_size: 16
+  epochs: 100
+  
+  lr: 0.000035
+  min_lr: 0.0000005
+  weight_decay: 0.03
+  betas: [0.9, 0.999]
+  
+  warmup_epochs: 6
+  
+  lambda_clip: 1.5
+  lambda_dino: 1.0
+  
+  triplet_margin: 0.2  # Standard margin
+  
+  log_interval: 10
+  val_interval: 5
+  save_interval: 10
+
+training:
+  device: "cuda"
+  seed: 42
+  grad_clip: 1
+
+paths:
+  checkpoints: "checkpoints"
+  logs: "logs"
+  models: "models"
+  results: "results"

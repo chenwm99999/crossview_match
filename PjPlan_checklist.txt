@@ -1,0 +1,814 @@
+Dataset: University-1652 (72 universities, ~50k pairs, 256×256)
+Architecture: Swin-Tiny + CLIP (frozen teacher) + DINOv2 (frozen teacher) + Layer-to-Layer Cross-Attention
+Phase 2: Two-level hierarchical classification (University → Building)
+Similarity Metric: Cosine similarity
+Retrieval: FAISS exact search (IndexFlatIP)
+Backend: FastAPI
+Frontend: Vanilla HTML/CSS/JavaScript
+Deployment: Docker Compose
+
+═══════════════════════════════════════════════════════════════════════
+Phase 0: Environment Setup & Data Preparation
+═══════════════════════════════════════════════════════════════════════
+
+Environment Configuration
+    Install PyTorch 2.0 + CUDA 11.8
+    Install timm 0.9.12 for Swin-Tiny
+    Install OpenAI CLIP from GitHub
+    Install DINOv2 from torch.hub
+    Install FAISS-GPU for fast retrieval
+    Install FastAPI + uvicorn + python-multipart
+    Install evaluation tools (scikit-learn, pandas, matplotlib)
+    Set up experiment tracking (wandb or TensorBoard)
+
+Dataset Preparation
+    Download University-1652 from GitHub repository
+    Verify dataset structure (train/test splits, drone/street/satellite folders)
+
+    Extract implementation sample. 
+    
+    Create hierarchical label mapping JSON:
+        Building ID → University ID (0-71)
+        Building ID → University name
+        Building ID → Building name
+        Save as: university_labels.json
+    
+    Implement PyTorch dataset class with paired loading (street + drone)
+    
+    Implement data augmentation:
+        Street images:
+            Random horizontal flip (p=0.5)
+            ColorJitter (brightness=0.2, contrast=0.2, saturation=0.2)
+            Random crop and resize (scale=0.9-1.0)
+        Drone images:
+            ColorJitter only (preserve spatial structure for matching)
+        Both:
+            Resize to 256×256
+            Normalize with ImageNet stats (mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+
+Pre-trained Model Search & Evaluation
+    Search for existing cross-view checkpoints:
+        Check GeoViewMatch GitHub repository for pre-trained weights
+        Check L2LTR repository for checkpoints
+        Check University-1652 baseline repository
+        Search Papers with Code for "cross-view geo-localization"
+        Check Hugging Face Hub for cross-view models
+    
+    If checkpoints found, evaluate compatibility:
+        Load checkpoint and inspect architecture
+        Test on small validation subset (100 images)
+        Measure baseline Recall@1 without fine-tuning
+        Document architecture differences (if any)
+    
+    Decision criteria:
+        IF checkpoint compatible AND achieves R@1 > 70% without training:
+            → Use as initialization for fine-tuning (Strategy: Fine-tune mode)
+        ELSE IF checkpoint partially compatible:
+            → Extract compatible layers, initialize from those
+        ELSE:
+            → Train from scratch with ImageNet-22k init (Strategy: From-scratch mode)
+    
+    Document decision:
+        Save finding in logs/pretrained_search_results.txt
+        Note: Strategy selected, expected time savings, baseline performance
+
+Evaluation Framework
+    Implement Recall@K metric (K=1,5,10) for Phase 1 cross-view retrieval
+    Implement Top-K accuracy metric (K=1,3,5) for Phase 2 classification
+    Implement hierarchical consistency check (predicted building matches predicted university)
+    Set up logging utilities and result visualization
+
+═══════════════════════════════════════════════════════════════════════
+Phase 1: Cross-View Matching with Swin-Tiny + CLIP + DINOv2 + L2L
+═══════════════════════════════════════════════════════════════════════
+
+Swin-Tiny Backbone
+    Load pretrained Swin-Tiny from timm:
+        Model: 'swin_tiny_patch4_window7_224'
+        Pretrained: ImageNet-22k weights (or GeoViewMatch if found)
+        Features_only: True (extract intermediate features)
+        Out_indices: [1, 2, 3] (stages 2, 3, 4)
+    
+    If GeoViewMatch checkpoint available:
+        Load GeoViewMatch pre-trained Swin-Tiny weights
+        Note: This already has cross-view matching knowledge
+        Skip ImageNet-22k initialization
+    
+    Modify for 256×256 input size:
+        Check if position embeddings need interpolation
+        Test forward pass to verify output shapes
+    
+    Extract multi-scale features:
+        Stage 2: [B, 96, 64, 64]
+        Stage 3: [B, 192, 32, 32]
+        Stage 4: [B, 384, 16, 16]
+    
+    Implement two separate encoders:
+        Street branch: SwinEncoder(swin_tiny)
+        Drone branch: SwinEncoder(swin_tiny) (separate weights, not shared)
+
+Layer-to-Layer Cross-Attention (Custom Code)
+    Implement L2LCrossAttention module:
+        Use nn.MultiheadAttention with num_heads=8
+        Input dimension matches stage dimensions (96, 192, 384)
+        Batch_first=True for easier handling
+    
+    Add cross-attention at each stage:
+        Stage 2: L2LCrossAttention(dim=96)
+        Stage 3: L2LCrossAttention(dim=192)
+        Stage 4: L2LCrossAttention(dim=384)
+    
+    Cross-attention mechanism:
+        Street queries drone: street_out = street + CrossAttn(Q=street, K=drone, V=drone)
+        Drone queries street: drone_out = drone + CrossAttn(Q=drone, K=street, V=street)
+        Implement residual connections (already shown above)
+    
+    Add LayerNorm after each cross-attention for stability
+    
+    Spatial dimension handling:
+        Flatten: [B, C, H, W] → [B, H*W, C] before attention
+        Reshape back: [B, H*W, C] → [B, C, H, W] after attention
+        Preserve spatial structure for next Swin stage
+
+Feature Projection
+    Implement global average pooling on final stage (stage 4):
+        Input: [B, 384, 16, 16]
+        Output: [B, 384] (averaged over spatial dimensions)
+    
+    Add projection heads for multi-teacher distillation:
+        CLIP projection head (512-dim):
+            Layer 1: Linear(384, 512) + BatchNorm1d + ReLU
+            Layer 2: Linear(512, 512)
+            No activation after final layer
+        
+        DINOv2 projection head (384-dim):
+            Layer 1: Linear(384, 384) + BatchNorm1d + ReLU
+            Layer 2: Linear(384, 384)
+            No activation after final layer
+        
+        Final embedding (for retrieval, use 512-dim):
+            Use CLIP-aligned 512-dim embeddings as primary
+    
+    Apply L2 normalization to all embeddings:
+        Formula: z = z / ||z||_2
+        Ensures unit norm for cosine similarity
+    
+    Verify output shapes:
+        street_emb_512: [B, 512] for CLIP alignment & retrieval
+        street_emb_384: [B, 384] for DINOv2 alignment
+
+CLIP Teacher (Frozen)
+    Load CLIP ViT-B/32 from OpenAI:
+        Model, preprocess = clip.load("ViT-B/32", device="cuda")
+        Output dimension: 512 (matches student CLIP projection)
+    
+    Set to eval mode and freeze all parameters:
+        Model.eval()
+        For param in model.parameters(): param.requires_grad = False
+    
+    Implement image encoding:
+        Resize images to 224×224 (CLIP's required input size)
+        Use F.interpolate(images, size=224, mode='bilinear')
+        Extract features: clip_features = model.encode_image(images)
+    
+    Extract 512-dim normalized features:
+        CLIP already outputs L2-normalized embeddings
+        Process both street and drone images separately
+    
+    Wrap in torch.no_grad() context
+
+DINOv2 Teacher (Frozen) - NEW
+    Load DINOv2 ViT-S/14 from torch.hub:
+        Model: dinov2_vits14
+        Command: torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+        Output dimension: 384
+        Pretrained: 142M images with self-supervised learning
+    
+    Set to eval mode and freeze all parameters:
+        Model.eval()
+        For param in model.parameters(): param.requires_grad = False
+    
+    Implement image encoding:
+        DINOv2 expects 224×224 (or 518×518 for high-res, but 224 is standard)
+        Resize: F.interpolate(images, size=224, mode='bilinear')
+        Extract features: dino_features = dinov2_model(images)
+    
+    Extract 384-dim normalized features:
+        DINOv2 outputs [B, 384] embeddings
+        Apply L2 normalization: F.normalize(dino_features, p=2, dim=1)
+        Process both street and drone images separately
+    
+    Wrap in torch.no_grad() context
+    
+    Rationale for adding DINOv2:
+        CLIP: Semantic features (trained on image-text pairs)
+        DINOv2: Pure visual features (self-supervised on images)
+        Complementary: CLIP captures "what it is", DINOv2 captures "how it looks"
+        Expected benefit: +2-3% Recall@1 from visual feature alignment
+
+Loss Functions
+    Implement triplet loss with hard negative mining:
+        Positive pair: (street_i, drone_i) - matched pair
+        Negative: drone_j where j ≠ i (random from batch)
+        Use 512-dim embeddings for triplet loss
+        Distance: d_pos = ||street_i - drone_i||_2
+        Distance: d_neg = ||street_i - drone_j||_2
+        Loss: log(1 + exp(α * (d_pos - d_neg)))
+        Set α=10 (controls gradient magnitude)
+        Take mean over batch
+    
+    Implement CLIP distillation loss:
+        MSE between student (512-dim) and CLIP teacher embeddings
+        L_clip_street = MSE(student_street_emb_512, clip_street_emb)
+        L_clip_drone = MSE(student_drone_emb_512, clip_drone_emb)
+        L_clip_distill = L_clip_street + L_clip_drone
+        Both embeddings must be L2-normalized before MSE
+    
+    Implement DINOv2 distillation loss - NEW:
+        MSE between student (384-dim) and DINOv2 teacher embeddings
+        L_dino_street = MSE(student_street_emb_384, dino_street_emb)
+        L_dino_drone = MSE(student_drone_emb_384, dino_drone_emb)
+        L_dino_distill = L_dino_street + L_dino_drone
+        Both embeddings must be L2-normalized before MSE
+    
+    Implement combined loss:
+        L_total = L_triplet + λ_clip * L_clip_distill + λ_dino * L_dino_distill
+        Set λ_clip = 0.5 (CLIP distillation weight)
+        Set λ_dino = 0.3 (DINOv2 distillation weight, slightly lower)
+        Rationale: CLIP has semantic info (more important), DINOv2 has visual info (complementary)
+        Log all three components separately for monitoring
+
+Training Configuration
+    Training mode selection:
+        IF GeoViewMatch checkpoint found:
+            Mode: Fine-tuning
+            Learning rate: 5e-5 (20× lower than from-scratch)
+            Epochs: 15 (instead of 50)
+            Freeze strategy: Freeze stages 1-2, fine-tune stages 3-4 + L2L + projection heads
+        ELSE:
+            Mode: Train from scratch
+            Learning rate: 1e-4
+            Epochs: 50
+            Freeze strategy: None (train all layers)
+    
+    Optimizer setup:
+        AdamW optimizer (better than Adam for transformers)
+        Learning rate: 1e-4 (from scratch) or 5e-5 (fine-tuning)
+        Weight decay: 0.03 (regularization)
+        Betas: (0.9, 0.999) (default)
+    
+    Learning rate schedule:
+        Cosine annealing: lr gradually decreases to near 0
+        T_max: 50 epochs (from scratch) or 15 epochs (fine-tuning)
+    
+    Warmup schedule:
+        From scratch: 5 epochs linear warmup
+        Fine-tuning: 2 epochs linear warmup (shorter, already good weights)
+    
+    Batch size configuration:
+        Default: 32
+        If OOM on 16GB GPU: reduce to 16 or use gradient accumulation
+        Monitor GPU memory usage during first epoch
+    
+    Gradient clipping:
+        Max norm: 1.0
+        Prevents exploding gradients in transformer training
+    
+    Training duration:
+        From scratch: 50 epochs (~4 hours/epoch = 200 hours total)
+        Fine-tuning: 15 epochs (~4 hours/epoch = 60 hours total)
+        Expected time savings: ~140 hours if fine-tuning
+
+Training Loop Implementation
+    For each epoch:
+        Set model to train mode
+        For each batch:
+            1. Load (street_img, drone_img, university_id, building_id)
+            2. Sample negative drone: drone_neg = drone_img[random_indices]
+            
+            3. Forward pass student encoder:
+                # Get both 512-dim (CLIP-aligned) and 384-dim (DINOv2-aligned) embeddings
+                street_emb_512, street_emb_384 = model(street_img, output_dims=[512, 384])
+                drone_pos_emb_512, drone_pos_emb_384 = model(drone_img, output_dims=[512, 384])
+                _, drone_neg_emb_512 = model(drone_neg, output_dims=[512, 384])
+            
+            4. Forward pass frozen teachers:
+                with torch.no_grad():
+                    # CLIP teacher
+                    clip_street = clip_teacher.encode(street_img)
+                    clip_drone = clip_teacher.encode(drone_img)
+                    
+                    # DINOv2 teacher
+                    dino_street = dinov2_teacher(street_img)
+                    dino_drone = dinov2_teacher(drone_img)
+            
+            5. Compute losses:
+                loss_triplet = compute_triplet_loss(street_emb_512, drone_pos_emb_512, drone_neg_emb_512)
+                loss_clip = compute_distillation_loss(street_emb_512, drone_pos_emb_512, clip_street, clip_drone)
+                loss_dino = compute_distillation_loss(street_emb_384, drone_pos_emb_384, dino_street, dino_drone)
+                loss_total = loss_triplet + 0.5 * loss_clip + 0.3 * loss_dino
+            
+            6. Backward pass:
+                optimizer.zero_grad()
+                loss_total.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+            
+            7. Log losses to wandb/tensorboard:
+                Log: loss_triplet, loss_clip, loss_dino, loss_total separately
+        
+        Validation every 5 epochs:
+            Set model to eval mode
+            Extract 512-dim embeddings for all validation images (use CLIP-aligned for retrieval)
+            Compute Recall@1/5/10 using cosine similarity
+            Log validation metrics
+            Save checkpoint if best R@1 so far
+        
+        Scheduler step (after each epoch)
+
+Checkpointing Strategy
+    Save every 10 epochs: model_epoch_{epoch}.pth
+    Save best model based on validation R@1: model_best.pth
+    Checkpoint contents:
+        model.state_dict()
+        optimizer.state_dict()
+        epoch number
+        best validation R@1
+        training configuration
+        training mode (from-scratch vs fine-tuning)
+        teacher models used (CLIP + DINOv2)
+
+Expected Phase 1 Results
+    Target metrics on test set:
+        Baseline expectations:
+            Swin-Tiny (ImageNet init, no teachers, no L2L): ~88-90% Recall@1
+            + CLIP teacher only: ~91-93% Recall@1
+            + L2L only: ~90-92% Recall@1
+        
+        With GeoViewMatch pre-trained (if found):
+            Before fine-tuning: ~85-90% Recall@1 (cross-dataset transfer)
+            After fine-tuning (15 epochs): ~94-96% Recall@1 ✓ BEST
+        
+        Full model from scratch (Swin + CLIP + DINOv2 + L2L):
+            Expected: ≥93-95% Recall@1 ✓ TARGET
+            Improvement from DINOv2: +2-3% over CLIP-only
+    
+    Inference speed: <40ms per query on GPU (using 512-dim embeddings)
+    Model size: ~30MB checkpoint file (student model only, teachers not saved)
+
+Ablation Study (for paper):
+    Train following variants for comparison:
+        1. Swin-Tiny baseline (ImageNet-22k init only)
+        2. + CLIP teacher (λ_clip=0.5)
+        3. + L2L cross-attention
+        4. + DINOv2 teacher (λ_dino=0.3)
+        5. Full model (all components)
+    
+    Document contribution of each component:
+        Create table showing Recall@1/5/10 for each variant
+        Plot training curves comparing convergence speed
+        Measure inference time for each configuration
+
+Version 1:
+- crossview_model.py → Baseline (Swin + L2L + CLIP + DINOv2)
+- train_cvm.py
+
+Version 2 (enhanced):
+- crossview_model_v2.py → + Multi-scale fusion + Attention pooling
+- train_cvm_v2.py → + Mixed precision
+
+═══════════════════════════════════════════════════════════════════════
+Phase 2: Hierarchical Location Classification
+═══════════════════════════════════════════════════════════════════════
+
+Build FAISS Retrieval Index
+    Extract embeddings for entire drone image database:
+        Load best Phase 1 model checkpoint
+        Set to eval mode
+        For each drone image in train+test sets:
+            drone_emb = model.encode(drone_img, output_dim=512)  # Use 512-dim CLIP-aligned
+            Store embedding with image metadata (path, university_id, building_id)
+        Result: [N, 512] embedding matrix where N ≈ 50,000 images
+    
+    Build FAISS index:
+        Index type: IndexFlatIP (exact inner product search for cosine similarity)
+        Add normalized embeddings: index.add(drone_embeddings)
+        Note: Inner product = cosine similarity when embeddings are L2-normalized
+    
+    Save index to disk:
+        faiss.write_index(index, "models/drone_index.faiss")
+        Save metadata separately: "models/drone_metadata.pkl"
+        Metadata includes: image paths, university IDs, building IDs
+    
+    Verify index:
+        Test query: search for known drone image
+        Check that top-1 result is the image itself
+        Expected search time: <5ms for 50k database on GPU
+
+Hierarchical Classifier Architecture
+    Load frozen Phase 1 encoder:
+        encoder = SwinL2LEncoder()
+        encoder.load_state_dict(torch.load("phase1_best.pth"))
+        encoder.eval()
+        For param in encoder.parameters(): param.requires_grad = False
+        Rationale: Encoder is already well-trained for cross-view matching
+    
+    Implement university classification head:
+        Input: Concatenated [street_emb, matched_drone_emb]
+            Dimension: 512 + 512 = 1024 (using CLIP-aligned embeddings)
+        Architecture:
+            Linear(1024, 512)
+            ReLU activation
+            Dropout(p=0.3) for regularization
+            Linear(512, 72) for 72 universities
+        Output: University logits [B, 72]
+        No softmax in forward pass (applied in loss function)
+    
+    Implement building classification head:
+        Input: Same concatenated embeddings [B, 1024]
+        Architecture:
+            Linear(1024, 1024)
+            ReLU activation
+            Dropout(p=0.3)
+            Linear(1024, 1652) for 1652 buildings
+        Output: Building logits [B, 1652]
+        Larger hidden dimension (1024) for fine-grained classification
+    
+    Combine in HierarchicalClassifier module:
+        class HierarchicalClassifier(nn.Module):
+            def __init__(self):
+                self.encoder = frozen_encoder
+                self.university_head = UniversityHead()
+                self.building_head = BuildingHead()
+            
+            def forward(self, street_img, matched_drone_img):
+                with torch.no_grad():
+                    street_emb = self.encoder.encode_street(street_img, output_dim=512)
+                    drone_emb = self.encoder.encode_drone(matched_drone_img, output_dim=512)
+                combined = torch.cat([street_emb, drone_emb], dim=1)
+                univ_logits = self.university_head(combined)
+                build_logits = self.building_head(combined)
+                return univ_logits, build_logits
+
+Training Strategy
+    Freeze Phase 1 encoder (RECOMMENDED):
+        Rationale: Encoder already learned good cross-view features (potentially with GeoViewMatch pre-training)
+        Benefit: Faster training, prevents overfitting
+        Only classification heads are trainable (~2M parameters vs 28M total)
+    
+    Optimizer for classification heads only:
+        AdamW(classification_parameters, lr=5e-4, weight_decay=0.01)
+        Higher learning rate than Phase 1 (only training small heads)
+    
+    Learning rate schedule:
+        Cosine annealing over 20 epochs
+        No warmup needed (smaller model, simpler task)
+    
+    Implement hierarchical loss:
+        L_university = CrossEntropyLoss(univ_logits, univ_labels)
+        L_building = CrossEntropyLoss(build_logits, build_labels)
+        L_total = α * L_university + (1 - α) * L_building
+        Set α = 0.3 (building task is primary, university is auxiliary)
+        Rationale: Building prediction is end goal, but university helps regularization
+    
+    Training duration: 20 epochs
+        Expected time: ~30 min/epoch = 10 hours total
+        Validate every 2 epochs
+    
+    Data loading:
+        For each training pair (street, drone, univ_id, build_id):
+            Use matched pairs from training set
+            No need for negative sampling (classification, not metric learning)
+
+Training Loop Implementation
+    For each epoch:
+        Set classification heads to train mode (encoder stays in eval)
+        For each batch:
+            1. Load (street_img, drone_img, university_id, building_id)
+            2. Forward pass:
+                univ_logits, build_logits = classifier(street_img, drone_img)
+            3. Compute hierarchical loss:
+                loss_univ = F.cross_entropy(univ_logits, university_id)
+                loss_build = F.cross_entropy(build_logits, building_id)
+                loss_total = 0.3 * loss_univ + 0.7 * loss_build
+            4. Backward pass:
+                optimizer.zero_grad()
+                loss_total.backward()
+                optimizer.step()
+            5. Log individual loss components
+        
+        Validation every 2 epochs:
+            For each validation batch:
+                Get predictions: univ_logits, build_logits = classifier(images)
+                Compute university Top-1 and Top-3 accuracy
+                Compute building Top-1 and Top-5 accuracy
+                Compute hierarchical consistency:
+                    pred_univ = univ_logits.argmax()
+                    pred_build = build_logits.argmax()
+                    check if building_to_university_map[pred_build] == pred_univ
+            Log validation metrics
+            Save best checkpoint based on building Top-1 accuracy
+
+CLIP Text Embedding Comparison Experiment
+    Purpose: Determine if CLIP text embeddings improve university classification
+    Approach: Test both methods on validation set, use best for final system
+    
+    ────────────────────────────────────────────────────────────────
+    Setup: Generate CLIP Text Features (One-Time, ~1 minute)
+    ────────────────────────────────────────────────────────────────
+    
+    Load CLIP text encoder:
+        clip_model, _ = clip.load("ViT-B/32", device="cuda")
+        Reuse same CLIP model from Phase 1
+    
+    Create university name prompts:
+        university_names = load_university_names()  # ["MIT", "Stanford University", "Georgia Tech", ...]
+        text_prompts = [f"a photo of a building at {name}" for name in university_names]
+        Alternative prompts to test:
+            - "a campus building at {name}"
+            - "{name} university building"
+            - "architecture at {name}"
+        Start with simplest: "a photo of a building at {name}"
+    
+    Encode text prompts:
+        text_tokens = clip.tokenize(text_prompts).cuda()  # [72, 77] token IDs
+        with torch.no_grad():
+            text_features = clip_model.encode_text(text_tokens)  # [72, 512]
+            text_features = F.normalize(text_features, p=2, dim=1)  # L2 normalize
+    
+    Save for later use:
+        torch.save(text_features, "models/clip_text_features.pth")
+        This is reusable - no need to recompute
+    
+    ────────────────────────────────────────────────────────────────
+    Quick Testing Protocol (Run on Small Subset First)
+    ────────────────────────────────────────────────────────────────
+    
+    Create small test subset:
+        Select 5 universities from validation set (~500 images)
+        Purpose: Quick iteration to test if CLIP helps
+        Expected time: ~5 minutes per test
+    
+    Implement EnsemblePredictor:
+        class EnsemblePredictor:
+            def __init__(self, classifier, clip_text_features):
+                self.classifier = classifier
+                self.clip_text_features = clip_text_features
+            
+            def predict(self, street_img, drone_img, use_clip=True, ensemble_weight=0.3):
+                # Get classifier predictions
+                univ_logits, build_logits = self.classifier(street_img, drone_img)
+                univ_probs = F.softmax(univ_logits, dim=1)  # [B, 72]
+                
+                if not use_clip:
+                    # Method 1: Classifier only
+                    return univ_probs, F.softmax(build_logits, dim=1)
+                
+                # Get image embedding for CLIP matching
+                with torch.no_grad():
+                    street_emb = self.classifier.encoder.encode_street(street_img, output_dim=512)  # [B, 512]
+                    street_emb = F.normalize(street_emb, p=2, dim=1)
+                
+                # CLIP text-image similarity
+                clip_similarities = street_emb @ self.clip_text_features.T  # [B, 72]
+                clip_probs = F.softmax(clip_similarities / 0.07, dim=1)  # Temperature=0.07
+                
+                # Ensemble combination
+                α = ensemble_weight
+                final_univ_probs = (1 - α) * univ_probs + α * clip_probs
+                
+                return final_univ_probs, F.softmax(build_logits, dim=1)
+    
+    Test different ensemble weights on small subset:
+        for α in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]:
+            predictor = EnsemblePredictor(classifier, clip_text_features, ensemble_weight=α)
+            subset_accuracy = evaluate_on_subset(predictor, small_val_set)
+            print(f"α={α}: Accuracy={subset_accuracy:.1%}")
+        
+        Quick decision:
+            If any α shows >1% improvement over α=0.0: proceed to full validation
+            Otherwise: skip CLIP ensemble, use classifier only
+    
+    ────────────────────────────────────────────────────────────────
+    Full Validation Set Comparison (If Small Subset Shows Promise)
+    ────────────────────────────────────────────────────────────────
+    
+    Test on complete validation set (~10,000 images):
+        Expected time: ~30 minutes for full sweep
+    
+    For each ensemble weight α in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]:
+        predictor = EnsemblePredictor(classifier, clip_text_features, ensemble_weight=α)
+        
+        Evaluate metrics:
+            university_top1_acc, university_top3_acc, inference_times
+            For each batch: compute accuracy and timing
+            Aggregate results
+    
+    ────────────────────────────────────────────────────────────────
+    Decision Criteria
+    ────────────────────────────────────────────────────────────────
+    
+    Calculate improvement:
+        baseline_acc = results[0.0]['top1']  # Classifier only
+        best_α = max(results.keys(), key=lambda k: results[k]['top1'])
+        best_acc = results[best_α]['top1']
+        improvement = best_acc - baseline_acc
+        latency_overhead = results[best_α]['inference_ms'] - results[0.0]['inference_ms']
+    
+    Decision rule:
+        IF improvement >= 0.02 (2%) AND latency_overhead <= 10ms:
+            USE CLIP ensemble with α = best_α in final system
+            Save configuration: config['use_clip_ensemble'] = True
+            Save optimal weight: config['clip_weight'] = best_α
+        ELSE:
+            USE classifier only
+            Save configuration: config['use_clip_ensemble'] = False
+    
+    Document decision for paper:
+        Log all results in table
+        Create plot: University Top-1 Accuracy vs Ensemble Weight α
+        Include in ablation study section
+    
+    ────────────────────────────────────────────────────────────────
+    Implementation for Final System (Config-Based Switch)
+    ────────────────────────────────────────────────────────────────
+    
+    Save configuration file (config.yaml):
+        model:
+          use_clip_ensemble: true/false  # Based on validation results
+          clip_weight: 0.3               # Optimal α from validation
+          clip_text_features_path: "models/clip_text_features.pth"
+          
+          # NEW: Training metadata
+          phase1_training_mode: "fine-tuning"  # or "from-scratch"
+          pretrained_source: "GeoViewMatch"    # or "ImageNet-22k" or "None"
+          teachers_used: ["CLIP", "DINOv2"]
+    
+    Implement prediction function with config switch:
+        def predict_location(image, config):
+            # Step 1: Retrieve matched drone view
+            street_emb = encoder.encode(image, output_dim=512)
+            similarities, indices = faiss_index.search(street_emb, k=1)
+            matched_drone = load_drone_image(indices[0])
+            
+            # Step 2: Hierarchical classification
+            univ_logits, build_logits = classifier(image, matched_drone)
+            
+            # Step 3: Apply CLIP ensemble if enabled
+            if config['use_clip_ensemble']:
+                clip_text_features = torch.load(config['clip_text_features_path'])
+                univ_probs = ensemble_with_clip(
+                    univ_logits, street_emb, clip_text_features, 
+                    weight=config['clip_weight']
+                )
+            else:
+                univ_probs = F.softmax(univ_logits, dim=1)
+            
+            # Get predictions
+            pred_univ = univ_probs.argmax()
+            pred_build = F.softmax(build_logits, dim=1).argmax()
+            
+            return pred_univ, pred_build, univ_probs.max(), similarities[0]
+
+Evaluation Metrics for Phase 2
+    University-level classification:
+        Top-1 accuracy: % of correctly predicted universities
+        Top-3 accuracy: % where true university in top-3 predictions
+        Per-class accuracy: Identify which universities are hard/easy
+        Target: Top-1 ≥ 70%, Top-3 ≥ 88%
+    
+    Building-level classification:
+        Top-1 accuracy: % of correctly predicted buildings
+        Top-5 accuracy: % where true building in top-5 predictions
+        Per-university accuracy: Group by university, see variation
+        Target: Top-1 ≥ 60%, Top-5 ≥ 82%
+    
+    Hierarchical consistency:
+        Metric: % of predictions where predicted building belongs to predicted university
+        Formula: consistency = (building_to_univ[pred_build] == pred_univ).mean()
+        Target: ≥ 85%
+    
+    Confidence calibration:
+        Plot: Confidence (max probability) vs Accuracy
+        Well-calibrated: 90% confidence → 90% actual accuracy
+
+Expected Phase 2 Results
+    Target metrics on test set:
+        University Top-1: ≥70% (72-way classification)
+        University Top-3: ≥88%
+        Building Top-1: ≥60% (1652-way classification)
+        Building Top-5: ≥82%
+        Hierarchical consistency: ≥85%
+        
+        With CLIP ensemble (if beneficial):
+            University Top-1: ≥73% (+3% improvement)
+            Latency overhead: <5ms
+    
+    If GeoViewMatch pre-training was used:
+        Expected slight improvement: +1-2% on all metrics
+        Reason: Better initial features from cross-view pre-training
+    
+    Model size: ~5MB (just classification heads, encoder reused from Phase 1)
+    Total system size: ~35MB (Phase 1 encoder + Phase 2 classifier + CLIP text features)
+
+═══════════════════════════════════════════════════════════════════════
+Phase 3: Web Application
+═══════════════════════════════════════════════════════════════════════
+
+Backend (FastAPI):
+    Model loading and inference pipeline
+    REST API endpoints
+    FAISS index search integration
+
+Frontend (HTML/CSS/JavaScript):
+    Simple upload interface
+    Results display with confidence scores
+    Example images for testing
+
+═══════════════════════════════════════════════════════════════════════
+Phase 4: Docker Deployment
+═══════════════════════════════════════════════════════════════════════
+
+Backend and frontend Dockerfiles
+Docker Compose orchestration
+Model packaging and distribution
+
+═══════════════════════════════════════════════════════════════════════
+Phase 5: Documentation & Evaluation
+═══════════════════════════════════════════════════════════════════════
+
+Comprehensive evaluation on test set
+Ablation studies
+Academic report writing
+Demo video creation
+Code release and documentation
+
+
+
+
+
+
+Overview
+We're building a cross-view geo-localization system that takes a street-view photo as input and predicts both the matched aerial view and the location (university + building name). The system uses University-1652 dataset (72 universities, 1,652 buildings) with perfectly aligned 256×256 images from both views.
+
+Phase 1: Cross-View Matching 
+Goal: Learn to match street photos to aerial views with high accuracy.
+Architecture: We use Swin-Tiny transformer as the backbone because its hierarchical structure naturally captures multi-scale features (building layout at coarse scales, architectural details at fine scales). The key innovation is Layer-to-Layer Cross-Attention - instead of processing street and aerial views completely separately, we add cross-attention between the two branches at stages 2, 3, and 4. This means the street encoder can "look at" what the aerial encoder is seeing, and vice versa, allowing them to learn corresponding features progressively.
+CLIP Distillation: We use a frozen CLIP ViT-B/32 as a teacher. CLIP was trained on 400M diverse internet images including various viewpoints, so it has learned viewpoint-invariant features. We distill this knowledge into our student model using MSE loss between their embeddings. This acts as semantic guidance - teaching the model that "a building from ground vs aerial should have similar semantic features" even though they look visually different.
+Training: We use triplet loss (pull matched pairs together, push unmatched pairs apart) combined with CLIP distillation loss. Train for 50 epochs with AdamW optimizer. The λ=0.5 weight balances metric learning with semantic guidance.
+Expected Outcome: Achieve 93%+ Recall@1, meaning when we search for a street photo's matching aerial view in a database of thousands, the correct match appears first 93% of the time.
+
+Phase 2: Hierarchical Location Prediction 
+Goal: Given a street photo and its matched aerial view, predict the location at two levels.
+Why Two Levels: Predicting the exact building (1 of 1,652) is very hard because buildings within the same university often look similar. But predicting the university first (1 of 72) is more feasible because each university has distinctive architectural style, campus layout, and geography. This mirrors how humans think: "This looks like a New England campus, probably MIT or Harvard" → "The modern angular design suggests MIT's Stata Center."
+Architecture: We freeze the Phase 1 encoder (it's already good at extracting features) and add two classification heads:
+
+University classifier: 72 classes
+Building classifier: 1,652 classes
+
+Both heads take concatenated [street_embedding, matched_aerial_embedding] as input. We use hierarchical loss that weights building prediction higher (it's the end goal) but still trains university prediction.
+CLIP Enhancement (Optional): If regular classification isn't accurate enough for universities, we can leverage CLIP's text encoder. We create text prompts like "a photo of a building at MIT" for each university, encode them, and ensemble with our classifier predictions. This adds zero-shot knowledge about what different universities "should" look like based on CLIP's web-scale training. We only use this if it improves accuracy by 2%+ without slowing inference.
+Expected Outcome: 70%+ university accuracy, 60%+ building accuracy. More importantly, the system should be confident when correct and show low confidence when unsure (for "unknown location" handling).
+
+Phase 3: Web Application 
+Goal: Make the system usable by anyone through a simple web interface.
+Backend (FastAPI): We build a REST API with a /predict endpoint. When a user uploads an image:
+
+Preprocess to 256×256
+Extract embedding with Phase 1 encoder
+Search FAISS index for top-5 matched aerial views (FAISS is a fast similarity search library)
+Take the best matched aerial image
+Run hierarchical classifier on (street, aerial) pair
+Return university name, building name, confidence scores, and matched aerial image as base64
+
+We pre-compute embeddings for all aerial images in the database and build a FAISS index offline, so inference is just one embedding extraction + one index search + one classification forward pass = under 2 seconds total.
+Frontend (HTML/JS): Ultra-simple interface - just an upload box and 3 example images. When user uploads or clicks an example, JavaScript sends the image to backend via fetch API, waits for response, then displays:
+
+Predicted university and building names
+Confidence bars (visual percentage indicators)
+Side-by-side comparison of input street view and matched aerial view
+Retrieval similarity score
+
+No React, no complex visualization - just clean, functional UI that demonstrates the system works.
+Why This Design: The two-level prediction makes the demo more interesting than just "here's the matched aerial view." Users see the AI reasoning: retrieval → university → building. The hierarchical approach also handles ambiguity better - if the system is unsure about the exact building but confident about the university, that's still useful information.
+
+Phase 4: Docker Deployment 
+Goal: Make the entire system reproducible with a single command.
+We containerize backend (PyTorch + FastAPI) and frontend (nginx serving static files) separately, then orchestrate with Docker Compose. Models are mounted as a volume, so users just need to:
+
+Clone the repo
+Download models (~1.5GB from Google Drive)
+Run docker-compose up
+Open localhost:3000 in browser
+
+The Dockerfile handles all dependencies, CUDA setup, and service configuration. This ensures the demo works identically on any machine with Docker + GPU.
+
+Phase 5: Documentation & Evaluation 
+Goal: Complete academic requirements and ensure reproducibility.
+We write a comprehensive report covering methodology, experiments, and deployment. Key sections:
+
+Ablation studies: Show that L2L cross-attention adds 2-4% Recall@1, CLIP adds 3-5%, they're complementary
+Comparison with baselines: Beat University-1652 paper's 86.7% baseline
+Qualitative analysis: Show success cases (iconic buildings correctly identified) and failure cases (visually similar buildings confused)
+
+We also create a demo video, clean code with documentation, and package everything for submission.
