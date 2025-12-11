@@ -106,7 +106,7 @@ cd frontend
 python -m http.server 3000
 ```
 Open http://localhost:3000
-
+<img src="results/app.jpg" alt="Web Application Interface" width="800">
 ---
 
 ## Project Structure
