@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cross-View Geo-localization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .panel h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 1.5em;
+        }
+
+        /* Left Panel - Upload */
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-height: 400px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f8f9fa;
+        }
+
+        .upload-area.has-image {
+            padding: 10px;
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: transform 0.2s;
+            font-weight: 600;
+            margin: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .image-display {
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .image-display img {
+            width: 100%;
+            display: block;
+        }
+
+        /* Middle Panel - Matched Drone */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 400px;
+            color: #999;
+        }
+
+        .empty-icon {
+            font-size: 5em;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .match-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .match-info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .match-info-item:last-child {
+            border-bottom: none;
+        }
+
+        .match-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .match-value {
+            color: #333;
+        }
+
+        /* Right Panel - Results */
+        .result-item {
+            background: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            transition: transform 0.2s;
+        }
+
+        .result-item:hover {
+            transform: translateX(5px);
+        }
+
+        .result-item.top-result {
+            border-left: 5px solid #667eea;
+            font-weight: 600;
+            background: linear-gradient(90deg, #f0f2ff 0%, #f8f9fa 100%);
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .result-name {
+            font-size: 1.1em;
+            color: #333;
+        }
+
+        .confidence-badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+
+        .confidence-bar {
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s;
+        }
+
+        .section-divider {
+            border-top: 2px solid #eee;
+            margin: 25px 0;
+        }
+
+        .section-title {
+            font-size: 1.1em;
+            color: #667eea;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee;
+            border: 2px solid #fcc;
+            color: #c33;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 1200px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🏛️ Cross-View Geo-localization</h1>
+        <p>Upload a street image to identify the university</p>
+    </div>
+
+    <div class="main-container">
+        <!-- LEFT: Upload Panel -->
+        <div class="panel">
+            <h2>📸 Street Image</h2>
+            
+            <div class="upload-area" id="uploadArea">
+                <div id="uploadPrompt">
+                    <div class="upload-icon">📤</div>
+                    <div class="upload-text">
+                        <strong>Click or drag image here</strong><br>
+                        <small>JPG, PNG (max 10MB)</small>
+                    </div>
+                    <button class="btn" onclick="document.getElementById('fileInput').click()">
+                        Choose Image
+                    </button>
+                </div>
+                
+                <div id="imagePreview" class="hidden">
+                    <div class="image-display">
+                        <img id="streetImage" alt="Street view">
+                    </div>
+                    <button class="btn" id="analyzeBtn">🔍 Analyze</button>
+                    <button class="btn btn-secondary" onclick="resetApp()">Reset</button>
+                </div>
+            </div>
+            
+            <input type="file" id="fileInput" accept="image/*">
+            
+            <div id="errorMessage" class="error hidden"></div>
+        </div>
+
+        <!-- MIDDLE: Matched Drone Panel -->
+        <div class="panel">
+            <h2>🛩️ Matched Drone View</h2>
+            
+            <div id="droneEmpty" class="empty-state">
+                <div class="empty-icon">🔍</div>
+                <p>Upload an image to see<br>matched drone view</p>
+            </div>
+            
+            <div id="droneResults" class="hidden">
+                <div class="image-display">
+                    <img id="droneImage" alt="Drone view">
+                </div>
+                
+                <div class="match-info">
+                    <div class="match-info-item">
+                        <span class="match-label">Match Quality:</span>
+                        <span class="match-value" id="matchQuality">-</span>
+                    </div>
+                    <div class="match-info-item">
+                        <span class="match-label">Database Index:</span>
+                        <span class="match-value" id="droneIndex">-</span>
+                    </div>
+                    <div class="match-info-item">
+                        <span class="match-label">Status:</span>
+                        <span class="match-value" style="color: #28a745;">✓ Matched</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="droneLoading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Analyzing image...</p>
+            </div>
+        </div>
+
+        <!-- RIGHT: Results Panel -->
+        <div class="panel">
+            <h2>🎯 Predictions</h2>
+            
+            <div id="resultsEmpty" class="empty-state">
+                <div class="empty-icon">🏛️</div>
+                <p>Results will appear here<br>after analysis</p>
+            </div>
+            
+            <div id="predictionResults" class="hidden">
+                <!-- University Predictions -->
+                <div class="section-title">University (Top 3)</div>
+                <div id="universityList"></div>
+                
+                <div class="section-divider"></div>
+                
+                <!-- Building Predictions -->
+                <div class="section-title">Building (Top 5)</div>
+                <div id="buildingList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let selectedFile = null;
+
+        // File input handling
+        document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+        document.getElementById('analyzeBtn').addEventListener('click', analyzeImage);
+
+        // Drag and drop
+        const uploadArea = document.getElementById('uploadArea');
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#764ba2';
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.style.borderColor = '#667eea';
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#667eea';
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        uploadArea.addEventListener('click', (e) => {
+            if (e.target === uploadArea || e.target.closest('#uploadPrompt')) {
+                document.getElementById('fileInput').click();
+            }
+        });
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        }
+
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showError('Please select an image file');
+                return;
+            }
+
+            if (file.size > 10 * 1024 * 1024) {
+                showError('Image must be smaller than 10MB');
+                return;
+            }
+
+            selectedFile = file;
+
+            // Show preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('streetImage').src = e.target.result;
+                document.getElementById('uploadPrompt').classList.add('hidden');
+                document.getElementById('imagePreview').classList.remove('hidden');
+                uploadArea.classList.add('has-image');
+            };
+            reader.readAsDataURL(file);
+
+            // Clear previous results
+            clearResults();
+        }
+
+        async function analyzeImage() {
+            if (!selectedFile) return;
+
+            // Hide error
+            document.getElementById('errorMessage').classList.add('hidden');
+
+            // Show loading in drone panel
+            document.getElementById('droneEmpty').classList.add('hidden');
+            document.getElementById('droneLoading').classList.remove('hidden');
+            document.getElementById('resultsEmpty').classList.add('hidden');
+
+            try {
+                // Create form data
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                // Make prediction request
+                const response = await fetch(`${API_URL}/predict`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+
+                const results = await response.json();
+
+                // Hide loading
+                document.getElementById('droneLoading').classList.add('hidden');
+
+                // Display results
+                displayResults(results);
+
+            } catch (error) {
+                console.error('Prediction error:', error);
+                document.getElementById('droneLoading').classList.add('hidden');
+                document.getElementById('droneEmpty').classList.remove('hidden');
+                showError(`Failed to analyze image: ${error.message}`);
+            }
+        }
+
+        function displayResults(results) {
+            // Show matched drone (placeholder - actual image would need backend to serve it)
+            document.getElementById('droneResults').classList.remove('hidden');
+            document.getElementById('matchQuality').textContent = 
+                `${(results.matched_drone.similarity * 100).toFixed(1)}%`;
+            document.getElementById('droneIndex').textContent = results.matched_drone.index;
+
+            // If drone image path is available, show it
+            // Note: You'd need to serve drone images from backend
+            // For now, show a placeholder
+            document.getElementById('droneImage').src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0iI2Y4ZjlmYSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5Nb3RjaGVkIERyb25lIFZpZXc8L3RleHQ+PC9zdmc+';
+
+            // University predictions
+            const universityHTML = results.university_predictions.slice(0, 3).map((pred, idx) => `
+                <div class="result-item ${idx === 0 ? 'top-result' : ''}">
+                    <div class="result-header">
+                        <span class="result-name">${pred.name}</span>
+                        <span class="confidence-badge">${(pred.confidence * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: ${pred.confidence * 100}%"></div>
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('universityList').innerHTML = universityHTML;
+
+            // Building predictions
+            const buildingHTML = results.building_predictions.slice(0, 5).map((pred, idx) => `
+                <div class="result-item ${idx === 0 ? 'top-result' : ''}">
+                    <div class="result-header">
+                        <span class="result-name">Building #${pred.id}</span>
+                        <span class="confidence-badge">${(pred.confidence * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="confidence-bar">
+                        <div class="confidence-fill" style="width: ${pred.confidence * 100}%"></div>
+                    </div>
+                </div>
+            `).join('');
+
+            document.getElementById('buildingList').innerHTML = buildingHTML;
+
+            // Show results
+            document.getElementById('resultsEmpty').classList.add('hidden');
+            document.getElementById('predictionResults').classList.remove('hidden');
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.remove('hidden');
+        }
+
+        function clearResults() {
+            document.getElementById('droneResults').classList.add('hidden');
+            document.getElementById('droneEmpty').classList.remove('hidden');
+            document.getElementById('predictionResults').classList.add('hidden');
+            document.getElementById('resultsEmpty').classList.remove('hidden');
+        }
+
+        function resetApp() {
+            // Reset state
+            selectedFile = null;
+            document.getElementById('fileInput').value = '';
+
+            // Reset upload area
+            document.getElementById('uploadPrompt').classList.remove('hidden');
+            document.getElementById('imagePreview').classList.add('hidden');
+            uploadArea.classList.remove('has-image');
+
+            // Clear results
+            clearResults();
+
+            // Hide error
+            document.getElementById('errorMessage').classList.add('hidden');
+        }
+
+        // Check server health on load
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                console.log('✓ Server connected:', data);
+            } catch (error) {
+                console.warn('⚠ Server not reachable. Make sure backend is running on port 8000');
+                showError('Backend server not running. Please start the server first.');
+            }
+        }
+
+        checkHealth();
+    </script>
+</body>
+</html>
