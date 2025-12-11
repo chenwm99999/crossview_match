@@ -19,15 +19,12 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
 # Virtual Environment
 venv/
 ENV/
 env/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
 
 # IDE
 .vscode/
@@ -35,15 +32,9 @@ pip-delete-this-directory.txt
 *.swp
 *.swo
 *~
-.spyderproject
-.spyproject
-.ropeproject
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb_checkpoints/
-profile_default/
-ipython_config.py
 
 # Data - ignore contents but keep folder
 data/*
@@ -55,7 +46,7 @@ logs/*
 !logs/.gitkeep
 !logs/README.md
 
-# All zip files and archives
+# All zip files
 *.zip
 *.tar
 *.tar.gz
@@ -66,6 +57,12 @@ logs/*
 pretrained/*
 !pretrained/.gitkeep
 !pretrained/README.md
+!pretrained/university1652_baseline/
+!pretrained/university1652_baseline/.gitkeep
+!pretrained/university1652_baseline/README.md
+!pretrained/l2ltr/
+!pretrained/l2ltr/.gitkeep
+!pretrained/l2ltr/README.md
 
 # Model files - ignore all pretrained models
 *.pth
@@ -73,18 +70,18 @@ pretrained/*
 *.ckpt
 *.bin
 *.safetensors
-*.pb
-*.h5
-*.hdf5
-*.onnx
-*.tflite
 
 # Checkpoints folder - keep structure but ignore all models
 checkpoints/*
 !checkpoints/.gitkeep
 !checkpoints/README.md
 
-# Model outputs and caches
+# Generated model indices (at root level)
+/models/*
+!models/.gitkeep
+!models/README.md
+
+# Model outputs
 *.faiss
 *.pkl
 *.pickle
@@ -93,46 +90,20 @@ checkpoints/*
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 desktop.ini
-$RECYCLE.BIN/
-*.lnk
 
 # Weights & Biases
 wandb/
-wandb-*.log
 
 # TensorBoard
 runs/
-events.out.tfevents.*
-
-# PyTorch profiler
-*.pt.trace.json
 
 # Temporary files
 *.tmp
 *.bak
 *.swp
-*~
-.cache/
 
 # Windows specific
 $RECYCLE.BIN/
 *.lnk
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Test coverage
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-*.cover
