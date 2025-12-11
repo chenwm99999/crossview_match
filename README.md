@@ -61,8 +61,10 @@ python scripts/inspect_dataset.py
 3. Refer to ./pretrained/l2ltr/README for more details
 
 **For our best pretrained checkpoint:**
-1. Download from: https://drive.google.com/file/d/1V9MZK2k4twtPV8whHkqqP2OrjeHvE4qR/view?usp=sharing
+1. Download from: https://drive.google.com/file/d/14ksep7WE2z57EsHUKdvOZJpgnPyFSmr8/view?usp=sharing
 2. Extract phase1_v2_best.pth and phase2_best.pth into ./checkpoints
+3. Extract drone_index.faiss, drone_metadata.pkl and drone_paths.pkl into ./models
+4. Refer to ./models/README for more details
 
 ### 4. Training
 
