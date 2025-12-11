@@ -95,6 +95,18 @@ Generates results in `results/final_evaluation/`:
 - Confusion matrix
 - Retrieval examples
 
+### 6. App Usage
+```bash
+# start backend server
+cd backend
+python app.py
+
+# In a new terminal, start frontend web endpoint
+cd frontend
+python -m http.server 3000
+```
+Open http://localhost:3000
+
 ---
 
 ## Project Structure

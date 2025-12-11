@@ -111,7 +111,7 @@ def inspect_university1652(data_root):
                     # Buildings 0001-0023 → University 0
                     # Buildings 0024-0046 → University 1, etc.
                     building_num = int(building_id)
-                    university_id = (building_num - 1) // 23  # Approximate grouping
+                    university_id = (building_num - 1) // 19  # Approximate grouping
                     
                     building_to_university[building_id] = university_id
                     university_map[university_id].add(building_id)
